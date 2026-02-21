@@ -3,13 +3,13 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabase';
 	import type { KeySession } from '$lib/supabase';
-	import { KEYS, type KeyName, FEEL_LABELS } from '$lib/music';
+	import { KEYS, FEEL_LABELS, type Mode } from '$lib/music';
 
 	let user = $state<any>(null);
 	let sessions = $state<KeySession[]>([]);
 	let loading = $state(true);
+	let gridMode = $state<Mode>('major');
 
-	// Last session per key (major only for grid)
 	let lastByKey = $derived.by(() => {
 		const map: Record<string, KeySession> = {};
 		for (const s of sessions) {
@@ -19,20 +19,17 @@
 		return map;
 	});
 
-	// Recent sessions list
 	let recent = $derived(sessions.slice(0, 20));
 
 	onMount(async () => {
 		const { data: { user: u } } = await supabase.auth.getUser();
 		if (!u) { goto('/login'); return; }
 		user = u;
-
 		const { data } = await supabase
 			.from('key_sessions')
 			.select('*')
 			.eq('user_id', u.id)
 			.order('practiced_at', { ascending: false });
-
 		if (data) sessions = data;
 		loading = false;
 	});
@@ -47,15 +44,6 @@
 		if (feel === 1) return '#5a1a1a';
 		return '#222';
 	}
-
-	// BPM trend for a key
-	function bpmHistory(key: KeyName, mode: string): (number | null)[] {
-		return sessions
-			.filter((s) => s.key_name === key && s.mode === mode)
-			.slice(0, 8)
-			.reverse()
-			.map((s) => s.bpm);
-	}
 </script>
 
 <div class="page">
@@ -64,12 +52,17 @@
 	{#if loading}
 		<p class="muted">Loading...</p>
 	{:else}
-		<!-- Key coverage grid -->
 		<section class="card">
-			<h2>Key coverage (major)</h2>
+			<div class="grid-header">
+				<h2>Key coverage</h2>
+				<div class="mode-toggle">
+					<button class:selected={gridMode === 'major'} onclick={() => (gridMode = 'major')}>Major</button>
+					<button class:selected={gridMode === 'minor'} onclick={() => (gridMode = 'minor')}>Minor</button>
+				</div>
+			</div>
 			<div class="key-grid">
 				{#each KEYS as k}
-					{@const last = lastByKey[`${k}-major`]}
+					{@const last = lastByKey[`${k}-${gridMode}`]}
 					{@const days = last ? daysSince(last.practiced_at) : null}
 					<div
 						class="key-cell"
@@ -94,17 +87,16 @@
 			</div>
 		</section>
 
-		<!-- Gaps: keys not practiced in 7+ days -->
 		{@const gaps = KEYS.filter((k) => {
-			const last = lastByKey[`${k}-major`];
+			const last = lastByKey[`${k}-${gridMode}`];
 			return !last || daysSince(last.practiced_at) >= 7;
 		})}
 		{#if gaps.length > 0}
 			<section class="card">
-				<h2>Needs attention (7+ days)</h2>
+				<h2>Needs attention — {gridMode} (7+ days)</h2>
 				<div class="gap-list">
 					{#each gaps as k}
-						{@const last = lastByKey[`${k}-major`]}
+						{@const last = lastByKey[`${k}-${gridMode}`]}
 						<span class="gap-key">
 							{k}
 							<em>{last ? `${daysSince(last.practiced_at)}d` : 'never'}</em>
@@ -114,7 +106,6 @@
 			</section>
 		{/if}
 
-		<!-- Recent sessions -->
 		<section class="card">
 			<h2>Recent sessions</h2>
 			{#if recent.length === 0}
@@ -148,25 +139,29 @@
 <style>
 	.page { display: flex; flex-direction: column; gap: 1.25rem; }
 	h1 { font-size: 1.4rem; font-weight: 600; }
-	h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; margin-bottom: 0.75rem; }
+	h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #555; margin-bottom: 0; }
 
 	.card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 1.1rem 1.25rem; }
 
-	.key-grid {
-		display: grid;
-		grid-template-columns: repeat(6, 1fr);
-		gap: 0.4rem;
+	.grid-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
 		margin-bottom: 0.75rem;
 	}
 
+	.mode-toggle { display: flex; gap: 0.4rem; }
+	.mode-toggle button {
+		background: #222; border: 1px solid #333; border-radius: 6px;
+		color: #666; padding: 0.25rem 0.7rem; font-size: 0.78rem;
+	}
+	.mode-toggle button.selected { background: #1e3a5f; border-color: #4a9eff; color: #e8e8e8; }
+
+	.key-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.4rem; margin-bottom: 0.75rem; }
+
 	.key-cell {
-		border: 1px solid #333;
-		border-radius: 6px;
-		padding: 0.5rem 0.3rem;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 2px;
+		border: 1px solid #333; border-radius: 6px; padding: 0.5rem 0.3rem;
+		display: flex; flex-direction: column; align-items: center; gap: 2px;
 	}
 
 	.key-name { font-size: 0.9rem; font-weight: 600; color: #e8e8e8; }
@@ -179,22 +174,15 @@
 
 	.gap-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 	.gap-key {
-		background: #222;
-		border: 1px solid #3a2020;
-		border-radius: 6px;
-		padding: 0.3rem 0.7rem;
-		font-size: 0.85rem;
-		color: #e8a020;
-		display: flex;
-		gap: 0.4rem;
-		align-items: center;
+		background: #222; border: 1px solid #3a2020; border-radius: 6px;
+		padding: 0.3rem 0.7rem; font-size: 0.85rem; color: #e8a020;
+		display: flex; gap: 0.4rem; align-items: center;
 	}
 	.gap-key em { font-style: normal; color: #555; font-size: 0.75rem; }
 
 	table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 	th { text-align: left; color: #444; font-weight: 500; padding: 0.3rem 0.5rem 0.5rem 0; border-bottom: 1px solid #2a2a2a; }
 	td { padding: 0.4rem 0.5rem 0.4rem 0; border-bottom: 1px solid #1f1f1f; color: #aaa; }
-
 	td.feel[data-feel='3'] { color: #4caf50; }
 	td.feel[data-feel='2'] { color: #e8a020; }
 	td.feel[data-feel='1'] { color: #ff6b6b; }

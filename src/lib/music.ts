@@ -126,3 +126,33 @@ export const FEEL_LABELS: Record<number, string> = {
 	2: 'OK',
 	3: 'Solid'
 };
+
+// --- Computed voicings ---
+
+export interface VoicingSet {
+	name: string;
+	chords: Array<{ degree: string; notes: string[] }>;
+}
+
+function rotateNotes(notes: string[], n: number): string[] {
+	const len = notes.length;
+	const by = n % len;
+	return [...notes.slice(by), ...notes.slice(0, by)];
+}
+
+export function computeVoicings(chords: ChordDegree[]): VoicingSet[] {
+	return [
+		{
+			name: 'Root position',
+			chords: chords.map((c) => ({ degree: c.degree, notes: [...c.notes] }))
+		},
+		{
+			name: '1st inversion',
+			chords: chords.map((c) => ({ degree: c.degree, notes: rotateNotes(c.notes, 1) }))
+		},
+		{
+			name: '2nd inversion',
+			chords: chords.map((c) => ({ degree: c.degree, notes: rotateNotes(c.notes, 2) }))
+		}
+	];
+}
