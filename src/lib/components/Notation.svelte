@@ -1,17 +1,44 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import type { KeyName, Mode, ChordDegree } from '$lib/music';
-	import { getScaleNotes, getKeyNotes, getVexKeySignature } from '$lib/music';
+	import type { KeyName, Mode, ChordDegree, ArpeggioType } from '$lib/music';
+	import {
+		getKeyNotes, getVexKeySignature,
+		assignOctaves, generateScaleNoteNames, generateArpeggioNoteNames,
+		getScaleFingering
+	} from '$lib/music';
 
 	interface Props {
 		key: KeyName;
 		mode: Mode;
-		type: 'scale' | 'chords';
+		type: 'scale' | 'chords' | 'arpeggio';
 		chords?: ChordDegree[];
+		direction?: 'up' | 'up-down';
+		octaves?: 1 | 2;
+		duration?: 'q' | '8';
+		timeSignature?: '4/4' | '3/4' | '6/8';
+		showFingering?: boolean;
+		arpeggioType?: ArpeggioType;
 	}
 
-	let { key: keyName, mode, type, chords = [] }: Props = $props();
+	let {
+		key: keyName,
+		mode,
+		type,
+		chords = [],
+		direction = 'up',
+		octaves = 1,
+		duration = 'q',
+		timeSignature = '4/4',
+		showFingering = false,
+		arpeggioType = 'root',
+	}: Props = $props();
+
 	let container = $state<HTMLDivElement | undefined>();
+
+	const SYSTEM_H = 175;   // px per system row (treble + bass)
+	const TREBLE_Y = 10;
+	const BASS_Y = 105;
+	const MEASURES_PER_ROW = 2;
 
 	const NOTE_TO_VEX: Record<string, string> = {
 		C: 'c', 'C#': 'c#', Db: 'db', D: 'd', 'D#': 'd#', Eb: 'eb',
@@ -19,39 +46,47 @@
 		Ab: 'ab', A: 'a', 'A#': 'a#', Bb: 'bb', B: 'b'
 	};
 
-	const ENHARMONIC: Record<string, string> = { Db: 'C#', Eb: 'D#', Gb: 'F#', Ab: 'G#', Bb: 'A#' };
-	const CHROMATIC = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+	// Notes per measure keyed by "timeSig/duration"
+	const NOTES_PER_MEASURE: Record<string, number> = {
+		'4/4/q': 4, '4/4/8': 8,
+		'3/4/q': 3, '3/4/8': 6,
+		'6/8/q': 3, '6/8/8': 6,
+	};
 
-	function assignOctaves(notes: string[], startOctave: number): number[] {
-		let octave = startOctave;
-		const octaves: number[] = [];
-		let prevIdx = -1;
-		for (const note of notes) {
-			const idx = CHROMATIC.indexOf(ENHARMONIC[note] ?? note);
-			if (prevIdx !== -1 && idx <= prevIdx) octave++;
-			octaves.push(octave);
-			prevIdx = idx;
-		}
-		return octaves;
-	}
-
-	// Return the accidental string needed for this note given the key, or null if none
 	function accidentalNeeded(note: string, keyNoteSet: Set<string>): string | null {
 		if (keyNoteSet.has(note)) return null;
 		if (note.includes('#')) return '#';
 		if (note.includes('b')) return 'b';
-		return 'n'; // natural sign — contradicts a key signature accidental
+		return 'n';
 	}
 
-	function makeStaveNote(VF: any, clef: string, noteNames: string[], octaves: number[], duration: string, keyNoteSet: Set<string>) {
-		const { StaveNote, Accidental } = VF;
-		const keys = noteNames.map((n, i) => `${NOTE_TO_VEX[n]}/${octaves[i]}`);
-		const sn = new StaveNote({ clef, keys, duration });
+	function makeStaveNote(
+		VF: any,
+		clef: string,
+		noteNames: string[],
+		octs: number[],
+		dur: string,
+		keyNoteSet: Set<string>,
+		fingerNums?: number[]
+	) {
+		const { StaveNote, Accidental, Fingering } = VF;
+		const keys = noteNames.map((n, i) => `${NOTE_TO_VEX[n]}/${octs[i]}`);
+		const sn = new StaveNote({ clef, keys, duration: dur });
 		noteNames.forEach((n, i) => {
 			const acc = accidentalNeeded(n, keyNoteSet);
 			if (acc) sn.addModifier(new Accidental(acc), i);
 		});
+		if (fingerNums && Fingering) {
+			fingerNums.forEach((f, i) => {
+				if (f !== undefined) sn.addModifier(new Fingering(String(f)), i);
+			});
+		}
 		return sn;
+	}
+
+	function makeRest(VF: any, clef: string, dur: string) {
+		// Rest notes use 'b/4' as placeholder key; 'r' suffix marks a rest
+		return new VF.StaveNote({ clef, keys: ['b/4'], duration: `${dur}r` });
 	}
 
 	async function render() {
@@ -59,82 +94,196 @@
 		container.innerHTML = '';
 
 		const VF = await import('vexflow');
-		const { Renderer, Stave, StaveConnector, Voice, Formatter } = VF;
+		const { Renderer, Stave, StaveConnector, Voice, Formatter, Beam } = VF;
 
 		const width = container.offsetWidth || 580;
-		const staveWidth = width - 40;
-		const leftMargin = 20;
 		const keySig = getVexKeySignature(keyName, mode);
 		const keyNoteSet = getKeyNotes(keyName, mode);
 
-		// Height: grand staff needs ~220px
-		const height = 220;
-		const renderer = new Renderer(container, Renderer.Backends.SVG);
-		renderer.resize(width, height);
-		const ctx = renderer.getContext();
+		// ── Chord mode: single-system grand staff, half notes ─────────────────────
+		if (type === 'chords') {
+			const staveW = width - 40;
+			const lm = 20;
+			const renderer = new Renderer(container, Renderer.Backends.SVG);
+			renderer.resize(width, 220);
+			const ctx = renderer.getContext();
 
-		const treble = new Stave(leftMargin, 10, staveWidth);
-		treble.addClef('treble').addKeySignature(keySig);
-		treble.setContext(ctx).draw();
+			const treble = new Stave(lm, 10, staveW).addClef('treble').addKeySignature(keySig);
+			const bass   = new Stave(lm, 110, staveW).addClef('bass').addKeySignature(keySig);
+			treble.setContext(ctx).draw();
+			bass.setContext(ctx).draw();
+			new StaveConnector(treble, bass).setType('brace').setContext(ctx).draw();
+			new StaveConnector(treble, bass).setType('singleLeft').setContext(ctx).draw();
 
-		const bass = new Stave(leftMargin, 110, staveWidth);
-		bass.addClef('bass').addKeySignature(keySig);
-		bass.setContext(ctx).draw();
-
-		new StaveConnector(treble, bass).setType('brace').setContext(ctx).draw();
-		new StaveConnector(treble, bass).setType('singleLeft').setContext(ctx).draw();
-
-		let trebleNotes: any[] = [];
-		let bassNotes: any[] = [];
-
-		if (type === 'scale') {
-			const scaleNotes = getScaleNotes(keyName, mode);
-			const trebleOctaves = assignOctaves(scaleNotes, 4);
-			const bassOctaves = assignOctaves(scaleNotes, 3);
-
-			trebleNotes = scaleNotes.map((n, i) =>
-				makeStaveNote(VF, 'treble', [n], [trebleOctaves[i]], 'q', keyNoteSet)
-			);
-			bassNotes = scaleNotes.map((n, i) =>
-				makeStaveNote(VF, 'bass', [n], [bassOctaves[i]], 'q', keyNoteSet)
-			);
-		} else {
-			trebleNotes = chords.map((chord) => {
-				const octaves = assignOctaves(chord.notes, 4);
-				return makeStaveNote(VF, 'treble', chord.notes, octaves, 'h', keyNoteSet);
+			if (chords.length === 0) return;
+			const tNotes = chords.map((c) => {
+				const octs = assignOctaves(c.notes, 4);
+				return makeStaveNote(VF, 'treble', c.notes, octs, 'h', keyNoteSet);
+			});
+			const bNotes = chords.map((c) => {
+				const rf = [c.notes[0], c.notes[2] ?? c.notes[0]];
+				const octs = assignOctaves(rf, 2);
+				return makeStaveNote(VF, 'bass', rf, octs, 'h', keyNoteSet);
 			});
 
-			// Bass: root + fifth
-			bassNotes = chords.map((chord) => {
-				const rootFifth = [chord.notes[0], chord.notes[2] ?? chord.notes[0]];
-				const octaves = assignOctaves(rootFifth, 2);
-				return makeStaveNote(VF, 'bass', rootFifth, octaves, 'h', keyNoteSet);
-			});
+			const tv = new Voice({ num_beats: chords.length, beat_value: 2 }).setMode(2);
+			tv.addTickables(tNotes);
+			const bv = new Voice({ num_beats: chords.length, beat_value: 2 }).setMode(2);
+			bv.addTickables(bNotes);
+
+			const noteW = treble.getNoteEndX() - treble.getNoteStartX() - 10;
+			new Formatter().joinVoices([tv]).joinVoices([bv]).format([tv, bv], noteW);
+			tv.draw(ctx, treble);
+			bv.draw(ctx, bass);
+			return;
 		}
 
-		if (trebleNotes.length === 0) return;
+		// ── Scale / Arpeggio: multi-system rendering ────────────────────────────────
+		const notesPerMeasure = NOTES_PER_MEASURE[`${timeSignature}/${duration}`] ?? 4;
+		const beatValue = duration === '8' ? 8 : 4;
 
-		const trebleVoice = new Voice({ num_beats: trebleNotes.length, beat_value: 4 }).setMode(2);
-		trebleVoice.addTickables(trebleNotes);
+		// Build note sequence
+		let noteSeq: string[];
+		let fingerData: { rh: number[]; lh: number[] } | null = null;
 
-		const bassVoice = new Voice({ num_beats: bassNotes.length, beat_value: 4 }).setMode(2);
-		bassVoice.addTickables(bassNotes);
+		if (type === 'scale') {
+			noteSeq = generateScaleNoteNames(keyName, mode, octaves, direction);
+			if (showFingering) fingerData = getScaleFingering(keyName, mode, octaves, direction);
+		} else {
+			// arpeggio
+			const chordNotes = chords[0]?.notes ?? ['C', 'E', 'G'];
+			noteSeq = generateArpeggioNoteNames(chordNotes, octaves, direction, arpeggioType);
+		}
 
-		const formatter = new Formatter();
-		formatter.joinVoices([trebleVoice]);
-		formatter.joinVoices([bassVoice]);
-		formatter.format([trebleVoice, bassVoice], staveWidth - 80);
+		const trebleOcts = assignOctaves(noteSeq, 4);
+		const bassOcts   = assignOctaves(noteSeq, 3);
 
-		trebleVoice.draw(ctx, treble);
-		bassVoice.draw(ctx, bass);
+		// Split into measures; pad last measure with rests
+		const measures: string[][] = [];
+		for (let i = 0; i < noteSeq.length; i += notesPerMeasure) {
+			measures.push(noteSeq.slice(i, i + notesPerMeasure));
+		}
+
+		const numSystems = Math.ceil(measures.length / MEASURES_PER_ROW);
+		const totalHeight = numSystems * SYSTEM_H + 20;
+
+		const renderer = new Renderer(container, Renderer.Backends.SVG);
+		renderer.resize(width, totalHeight);
+		const ctx = renderer.getContext();
+
+		const lm = 15;
+		const availW = width - lm; // total horizontal space
+
+		let noteIdx = 0;
+
+		for (let sysIdx = 0; sysIdx < numSystems; sysIdx++) {
+			const sysY = sysIdx * SYSTEM_H;
+			const measStart = sysIdx * MEASURES_PER_ROW;
+			const measEnd   = Math.min(measStart + MEASURES_PER_ROW, measures.length);
+			const numMeas   = measEnd - measStart;
+
+			// Equal stave widths across the system
+			const staveW = availW / MEASURES_PER_ROW;
+
+			// Draw staves first (so we can read noteStartX)
+			const trebleStaves: any[] = [];
+			const bassStaves:   any[] = [];
+
+			for (let mi = 0; mi < numMeas; mi++) {
+				const isFirst = mi === 0;
+				const x = lm + mi * staveW;
+
+				const ts = new Stave(x, sysY + TREBLE_Y, staveW);
+				const bs = new Stave(x, sysY + BASS_Y,   staveW);
+
+				if (isFirst) {
+					ts.addClef('treble').addKeySignature(keySig);
+					bs.addClef('bass').addKeySignature(keySig);
+					if (sysIdx === 0) {
+						ts.addTimeSignature(timeSignature);
+						bs.addTimeSignature(timeSignature);
+					}
+				}
+
+				ts.setContext(ctx).draw();
+				bs.setContext(ctx).draw();
+				trebleStaves.push(ts);
+				bassStaves.push(bs);
+			}
+
+			// Connectors
+			if (sysIdx === 0) {
+				new StaveConnector(trebleStaves[0], bassStaves[0]).setType('brace').setContext(ctx).draw();
+			}
+			new StaveConnector(trebleStaves[0], bassStaves[0]).setType('singleLeft').setContext(ctx).draw();
+
+			// Draw notes measure by measure within this system
+			for (let mi = 0; mi < numMeas; mi++) {
+				const measNotes = measures[measStart + mi];
+				const padCount  = notesPerMeasure - measNotes.length;
+
+				const tNotes: any[] = [];
+				const bNotes: any[] = [];
+				// Track real (non-rest) notes separately for beaming
+				const tBeam: any[] = [];
+				const bBeam: any[] = [];
+
+				measNotes.forEach((n, ni) => {
+					const gIdx = noteIdx + ni;
+					const rhF = (showFingering && fingerData) ? fingerData.rh[gIdx] : undefined;
+					const lhF = (showFingering && fingerData) ? fingerData.lh[gIdx] : undefined;
+					const tn = makeStaveNote(VF, 'treble', [n], [trebleOcts[gIdx]], duration, keyNoteSet, rhF !== undefined ? [rhF] : undefined);
+					const bn = makeStaveNote(VF, 'bass',   [n], [bassOcts[gIdx]],   duration, keyNoteSet, lhF !== undefined ? [lhF] : undefined);
+					tNotes.push(tn); tBeam.push(tn);
+					bNotes.push(bn); bBeam.push(bn);
+				});
+				for (let p = 0; p < padCount; p++) {
+					tNotes.push(makeRest(VF, 'treble', duration));
+					bNotes.push(makeRest(VF, 'bass',   duration));
+					// rests are excluded from beam arrays
+				}
+
+				noteIdx += measNotes.length;
+
+				const tv = new Voice({ num_beats: notesPerMeasure, beat_value: beatValue }).setMode(2);
+				tv.addTickables(tNotes);
+				const bv = new Voice({ num_beats: notesPerMeasure, beat_value: beatValue }).setMode(2);
+				bv.addTickables(bNotes);
+
+				// Create beams BEFORE drawing voices — this marks notes as beamed,
+				// which suppresses their individual flags during voice.draw()
+				const tBeams = (duration === '8' && Beam && tBeam.length > 1)
+					? Beam.generateBeams(tBeam) : [];
+				const bBeams = (duration === '8' && Beam && bBeam.length > 1)
+					? Beam.generateBeams(bBeam) : [];
+
+				// Use actual note area width from stave geometry
+				const noteAreaW = trebleStaves[mi].getNoteEndX() - trebleStaves[mi].getNoteStartX() - 10;
+
+				new Formatter().joinVoices([tv]).joinVoices([bv]).format([tv, bv], noteAreaW);
+				tv.draw(ctx, trebleStaves[mi]);
+				bv.draw(ctx, bassStaves[mi]);
+
+				// Draw beam lines after voices
+				tBeams.forEach((b: any) => b.setContext(ctx).draw());
+				bBeams.forEach((b: any) => b.setContext(ctx).draw());
+			}
+
+			// If this system only has 1 measure (last system, odd count), draw empty second stave
+			if (numMeas < MEASURES_PER_ROW) {
+				const x = lm + numMeas * staveW;
+				const ts = new Stave(x, sysY + TREBLE_Y, staveW);
+				const bs = new Stave(x, sysY + BASS_Y,   staveW);
+				ts.setContext(ctx).draw();
+				bs.setContext(ctx).draw();
+			}
+		}
 	}
 
 	$effect(() => {
-		void keyName;
-		void mode;
-		void type;
-		void chords;
-		void container;
+		void keyName; void mode; void type; void chords;
+		void direction; void octaves; void duration; void timeSignature;
+		void showFingering; void arpeggioType; void container;
 		if (browser && container) render();
 	});
 </script>

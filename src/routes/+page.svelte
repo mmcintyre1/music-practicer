@@ -4,7 +4,7 @@
 	import { supabase } from '$lib/supabase';
 	import type { ScaleVariation, KeySession, Feel } from '$lib/supabase';
 	import {
-		KEYS, type KeyName, type Mode,
+		KEYS, type KeyName, type Mode, type ArpeggioType,
 		getScaleNotes, getProgressionChords, computeVoicings,
 		PROGRESSIONS, FEEL_LABELS
 	} from '$lib/music';
@@ -12,7 +12,7 @@
 	import Timer from '$lib/components/Timer.svelte';
 
 	// --- Types ---
-	type Tab = 'scales' | 'chords' | 'repertoire';
+	type Tab = 'scales' | 'chords' | 'arpeggio' | 'repertoire';
 	type PieceStatus = 'new' | 'working' | 'polishing' | 'done';
 
 	interface Piece {
@@ -47,6 +47,16 @@
 	// --- Chords tab ---
 	let selectedProgression = $state(PROGRESSIONS[0].id);
 
+	// --- Notation config (shared across Scales + Arpeggio tabs) ---
+	let notationOctaves   = $state<1 | 2>(1);
+	let notationDirection = $state<'up' | 'up-down'>('up');
+	let notationDuration  = $state<'q' | '8'>('q');
+	let notationTimeSig   = $state<'4/4' | '3/4' | '6/8'>('4/4');
+	let notationFingering = $state(false);
+
+	// --- Arpeggio tab ---
+	let selectedArpeggioType = $state<ArpeggioType>('root');
+
 	// --- Repertoire tab ---
 	let pieces = $state<Piece[]>([]);
 	let showAddForm = $state(false);
@@ -59,6 +69,8 @@
 	let chords = $derived(getProgressionChords(selectedKey, selectedMode, selectedProgression));
 	let voicings = $derived(computeVoicings(chords));
 	let lastSession = $derived(lastSessions[`${selectedKey}-${selectedMode}`] ?? null);
+	// Tonic chord (I/i) used for arpeggio display
+	let arpeggioChord = $derived(getProgressionChords(selectedKey, selectedMode, 'I-IV-V7')[0]);
 
 	// Group pieces by status for display
 	const STATUS_ORDER: PieceStatus[] = ['new', 'working', 'polishing', 'done'];
@@ -227,6 +239,9 @@
 		<button class="sec-tab" class:active={selectedTab === 'chords'} onclick={() => (selectedTab = 'chords')}>
 			Chords
 		</button>
+		<button class="sec-tab" class:active={selectedTab === 'arpeggio'} onclick={() => (selectedTab = 'arpeggio')}>
+			Arpeggio
+		</button>
 		<button class="sec-tab" class:active={selectedTab === 'repertoire'} onclick={() => (selectedTab = 'repertoire')}>
 			Repertoire
 		</button>
@@ -246,7 +261,47 @@
 					<span class="note">{note}</span>
 				{/each}
 			</div>
-			<Notation key={selectedKey} mode={selectedMode} type="scale" />
+
+			<!-- Notation config controls -->
+			<div class="notation-config">
+				<div class="cfg-group">
+					<span class="cfg-label">Octaves</span>
+					<button class="cfg-btn" class:on={notationOctaves === 1} onclick={() => (notationOctaves = 1)}>1</button>
+					<button class="cfg-btn" class:on={notationOctaves === 2} onclick={() => (notationOctaves = 2)}>2</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Direction</span>
+					<button class="cfg-btn" class:on={notationDirection === 'up'} onclick={() => (notationDirection = 'up')}>Up</button>
+					<button class="cfg-btn" class:on={notationDirection === 'up-down'} onclick={() => (notationDirection = 'up-down')}>↑↓</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Notes</span>
+					<button class="cfg-btn" class:on={notationDuration === 'q'} onclick={() => (notationDuration = 'q')}>♩</button>
+					<button class="cfg-btn" class:on={notationDuration === '8'} onclick={() => (notationDuration = '8')}>♪</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Time</span>
+					<button class="cfg-btn" class:on={notationTimeSig === '4/4'} onclick={() => (notationTimeSig = '4/4')}>4/4</button>
+					<button class="cfg-btn" class:on={notationTimeSig === '3/4'} onclick={() => (notationTimeSig = '3/4')}>3/4</button>
+					<button class="cfg-btn" class:on={notationTimeSig === '6/8'} onclick={() => (notationTimeSig = '6/8')}>6/8</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Fingering</span>
+					<button class="cfg-btn" class:on={!notationFingering} onclick={() => (notationFingering = false)}>Off</button>
+					<button class="cfg-btn" class:on={notationFingering} onclick={() => (notationFingering = true)}>On</button>
+				</div>
+			</div>
+
+			<Notation
+				key={selectedKey}
+				mode={selectedMode}
+				type="scale"
+				octaves={notationOctaves}
+				direction={notationDirection}
+				duration={notationDuration}
+				timeSignature={notationTimeSig}
+				showFingering={notationFingering}
+			/>
 		</section>
 
 		<section class="card">
@@ -343,6 +398,63 @@
 					{/each}
 				</tbody>
 			</table>
+		</section>
+
+	<!-- ===== ARPEGGIO TAB ===== -->
+	{:else if selectedTab === 'arpeggio'}
+		<section class="card timer-card">
+			<h2>10 min timer</h2>
+			<Timer defaultMinutes={10} />
+		</section>
+
+		<section class="card">
+			<h2>{selectedKey} {selectedMode} — {arpeggioChord.degree} arpeggio</h2>
+			<p class="chord-notes-hint">{arpeggioChord.notes.join(' – ')}</p>
+
+			<!-- Arpeggio type selector -->
+			<div class="arp-types">
+				<button class="arp-btn" class:selected={selectedArpeggioType === 'root'}       onclick={() => (selectedArpeggioType = 'root')}>Root</button>
+				<button class="arp-btn" class:selected={selectedArpeggioType === 'first-inv'}  onclick={() => (selectedArpeggioType = 'first-inv')}>1st inv</button>
+				<button class="arp-btn" class:selected={selectedArpeggioType === 'second-inv'} onclick={() => (selectedArpeggioType = 'second-inv')}>2nd inv</button>
+				<button class="arp-btn" class:selected={selectedArpeggioType === 'broken'}     onclick={() => (selectedArpeggioType = 'broken')}>Broken</button>
+			</div>
+
+			<!-- Notation config controls (same as Scales) -->
+			<div class="notation-config">
+				<div class="cfg-group">
+					<span class="cfg-label">Octaves</span>
+					<button class="cfg-btn" class:on={notationOctaves === 1} onclick={() => (notationOctaves = 1)}>1</button>
+					<button class="cfg-btn" class:on={notationOctaves === 2} onclick={() => (notationOctaves = 2)}>2</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Direction</span>
+					<button class="cfg-btn" class:on={notationDirection === 'up'} onclick={() => (notationDirection = 'up')}>Up</button>
+					<button class="cfg-btn" class:on={notationDirection === 'up-down'} onclick={() => (notationDirection = 'up-down')}>↑↓</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Notes</span>
+					<button class="cfg-btn" class:on={notationDuration === 'q'} onclick={() => (notationDuration = 'q')}>♩</button>
+					<button class="cfg-btn" class:on={notationDuration === '8'} onclick={() => (notationDuration = '8')}>♪</button>
+				</div>
+				<div class="cfg-group">
+					<span class="cfg-label">Time</span>
+					<button class="cfg-btn" class:on={notationTimeSig === '4/4'} onclick={() => (notationTimeSig = '4/4')}>4/4</button>
+					<button class="cfg-btn" class:on={notationTimeSig === '3/4'} onclick={() => (notationTimeSig = '3/4')}>3/4</button>
+					<button class="cfg-btn" class:on={notationTimeSig === '6/8'} onclick={() => (notationTimeSig = '6/8')}>6/8</button>
+				</div>
+			</div>
+
+			<Notation
+				key={selectedKey}
+				mode={selectedMode}
+				type="arpeggio"
+				chords={[arpeggioChord]}
+				octaves={notationOctaves}
+				direction={notationDirection}
+				duration={notationDuration}
+				timeSignature={notationTimeSig}
+				arpeggioType={selectedArpeggioType}
+			/>
 		</section>
 
 	<!-- ===== REPERTOIRE TAB ===== -->
@@ -493,6 +605,38 @@
 		background: #222; border: 1px solid #333; border-radius: 4px;
 		padding: 0.25rem 0.6rem; font-size: 0.9rem; font-family: monospace;
 	}
+
+	/* Notation config controls */
+	.notation-config {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1rem;
+		margin: 0.75rem 0 0;
+		padding: 0.65rem 0.75rem;
+		background: #161616;
+		border: 1px solid #252525;
+		border-radius: 7px;
+	}
+
+	.cfg-group { display: flex; align-items: center; gap: 0.3rem; }
+
+	.cfg-label { font-size: 0.72rem; color: #444; margin-right: 0.15rem; white-space: nowrap; }
+
+	.cfg-btn {
+		background: #222; border: 1px solid #333; border-radius: 4px;
+		color: #555; padding: 0.2rem 0.5rem; font-size: 0.75rem;
+	}
+	.cfg-btn.on { background: #1e3a5f; border-color: #4a9eff; color: #c8d8f0; }
+
+	/* Arpeggio type selector */
+	.arp-types { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+	.arp-btn {
+		background: #222; border: 1px solid #333; border-radius: 6px;
+		color: #666; padding: 0.3rem 0.75rem; font-size: 0.82rem;
+	}
+	.arp-btn.selected { background: #1e3a5f; border-color: #4a9eff; color: #e8e8e8; }
+
+	.chord-notes-hint { font-size: 0.82rem; color: #555; font-family: monospace; margin-bottom: 0.6rem; }
 
 	/* Chord tabs */
 	.prog-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.9rem; }

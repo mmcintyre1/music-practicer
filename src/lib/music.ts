@@ -127,6 +127,134 @@ export const FEEL_LABELS: Record<number, string> = {
 	3: 'Solid'
 };
 
+// --- Sequence generators ---
+
+// Sharps-only chromatic scale for semitone index lookups
+const CHROM_S = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// Enharmonic flat→sharp map for index lookups
+const ENAR_MAP: Record<string,string> = { Db:'C#', Eb:'D#', Gb:'F#', Ab:'G#', Bb:'A#' };
+
+/** Assign octave numbers to a sequence of note names (no octave suffix).
+ *  Handles ascending, descending, and mixed sequences correctly. */
+export function assignOctaves(notes: string[], startOctave: number): number[] {
+	let octave = startOctave;
+	const result: number[] = [];
+	let prevIdx = -1;
+	for (const note of notes) {
+		const idx = CHROM_S.indexOf(ENAR_MAP[note] ?? note);
+		if (prevIdx !== -1) {
+			const diff = idx - prevIdx;
+			if (diff < -6) octave++;      // ascending wrap: B(11)→C(0)
+			else if (diff > 6) octave--;  // descending wrap: C(0)→B(11)
+		}
+		result.push(octave);
+		prevIdx = idx;
+	}
+	return result;
+}
+
+/** Generate ascending (and optional descending) scale note names for rendering. */
+export function generateScaleNoteNames(
+	key: KeyName,
+	mode: Mode,
+	octaves: 1 | 2,
+	direction: 'up' | 'up-down'
+): string[] {
+	const base = getScaleNotes(key, mode); // 8 notes: root … root+oct
+	const unique = base.slice(0, 7);       // 7 unique pitch-class names
+	const up = octaves === 1 ? [...base] : [...unique, ...base]; // 8 or 15
+	if (direction === 'up') return up;
+	const down = [...up.slice(0, -1)].reverse(); // descend without duplicating top
+	return [...up, ...down];
+}
+
+export type ArpeggioType = 'root' | 'first-inv' | 'second-inv' | 'broken';
+
+/** Generate arpeggio note names from a chord's note array. */
+export function generateArpeggioNoteNames(
+	chordNotes: string[],
+	octaves: 1 | 2,
+	direction: 'up' | 'up-down',
+	type: ArpeggioType
+): string[] {
+	const inverted =
+		type === 'first-inv'  ? rotateNotes(chordNotes, 1) :
+		type === 'second-inv' ? rotateNotes(chordNotes, 2) :
+		[...chordNotes];
+	const notes3 = inverted.slice(0, 3);
+
+	let up: string[];
+	if (type === 'broken') {
+		// 1-3-5-3 repeating cell, close on root
+		const cell = [notes3[0], notes3[1], notes3[2], notes3[1]];
+		up = octaves === 1 ? [...cell, notes3[0]] : [...cell, ...cell, notes3[0]];
+	} else {
+		// Cycle through the 3 notes for each octave, close on starting note
+		up = [];
+		for (let o = 0; o < octaves; o++) up.push(...notes3);
+		up.push(notes3[0]);
+	}
+
+	if (direction === 'up') return up;
+	const down = [...up.slice(0, -1)].reverse();
+	return [...up, ...down];
+}
+
+// --- Fingering ---
+
+export interface FingeringData {
+	rh: number[];
+	lh: number[];
+}
+
+// Standard 1-octave ascending fingerings (8 entries: root … root+oct).
+// Source: widely-used method book conventions (Alfred, Schaum, Hanon).
+const SCALE_FINGERINGS: Record<string, FingeringData> = {
+	'C-major':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'G-major':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'D-major':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'A-major':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'E-major':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'B-major':  { rh: [1,2,3,1,2,3,4,5], lh: [4,3,2,1,4,3,2,1] },
+	'F#-major': { rh: [2,3,4,1,2,3,1,2], lh: [4,3,2,1,3,2,1,4] },
+	'F-major':  { rh: [1,2,3,4,1,2,3,4], lh: [5,4,3,2,1,3,2,1] },
+	'Bb-major': { rh: [4,1,2,3,1,2,3,4], lh: [3,2,1,4,3,2,1,3] },
+	'Eb-major': { rh: [3,1,2,3,4,1,2,3], lh: [3,2,1,4,3,2,1,3] },
+	'Ab-major': { rh: [3,4,1,2,3,1,2,3], lh: [3,2,1,4,3,2,1,3] },
+	'Db-major': { rh: [2,3,1,2,3,4,1,2], lh: [3,2,1,4,3,2,1,3] },
+	'C-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'G-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'D-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'A-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'E-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [5,4,3,2,1,3,2,1] },
+	'B-minor':  { rh: [1,2,3,1,2,3,4,5], lh: [4,3,2,1,3,2,1,4] },
+	'F#-minor': { rh: [1,2,3,1,2,3,4,5], lh: [4,3,2,1,3,2,1,4] },
+	'F-minor':  { rh: [1,2,3,4,1,2,3,4], lh: [5,4,3,2,1,3,2,1] },
+	'Bb-minor': { rh: [4,1,2,3,1,2,3,4], lh: [3,2,1,4,3,2,1,3] },
+	'Eb-minor': { rh: [3,1,2,3,4,1,2,3], lh: [3,2,1,4,3,2,1,3] },
+	'Ab-minor': { rh: [3,4,1,2,3,1,2,3], lh: [3,2,1,4,3,2,1,3] },
+	'Db-minor': { rh: [2,3,1,2,3,4,1,2], lh: [3,2,1,4,3,2,1,3] },
+};
+
+/** Return finger numbers for an ascending (and optional descending) scale,
+ *  extended to 2 octaves if requested. */
+export function getScaleFingering(
+	key: KeyName,
+	mode: Mode,
+	octaves: 1 | 2,
+	direction: 'up' | 'up-down'
+): FingeringData {
+	const base = SCALE_FINGERINGS[`${key}-${mode}`] ?? SCALE_FINGERINGS['C-major'];
+	// Extend to 2 octaves: first 7 of 1-oct pattern + full 8-entry pattern = 15
+	const rhUp = octaves === 1 ? [...base.rh] : [...base.rh.slice(0, 7), ...base.rh];
+	const lhUp = octaves === 1 ? [...base.lh] : [...base.lh.slice(0, 7), ...base.lh];
+	if (direction === 'up') return { rh: rhUp, lh: lhUp };
+	// Descending: reverse ascending (drop the shared top note)
+	const rhDown = [...rhUp.slice(0, -1)].reverse();
+	const lhDown = [...lhUp.slice(0, -1)].reverse();
+	return { rh: [...rhUp, ...rhDown], lh: [...lhUp, ...lhDown] };
+}
+
 // --- Computed voicings ---
 
 export interface VoicingSet {
