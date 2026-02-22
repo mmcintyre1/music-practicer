@@ -4,7 +4,7 @@
 	import {
 		getKeyNotes, getVexKeySignature,
 		assignOctaves, generateScaleNoteNames, generateArpeggioNoteNames,
-		getScaleFingering
+		getScaleFingering, voiceLeadChords
 	} from '$lib/music';
 
 	interface Props {
@@ -135,10 +135,14 @@
 			new StaveConnector(treble, bass).setType('singleLeft').setContext(ctx).draw();
 
 			if (chords.length === 0) return;
-			const tNotes = chords.map((c) => {
-				const octs = assignOctaves(c.notes, 4);
-				return makeStaveNote(VF, 'treble', c.notes, octs, 'h', keyNoteSet);
-			});
+
+			// Treble: smooth voice-led inversions (soprano-first comparison)
+			const voiced = voiceLeadChords(chords);
+			const tNotes = voiced.map((v) =>
+				makeStaveNote(VF, 'treble', v.notes, v.octs, 'h', keyNoteSet)
+			);
+
+			// Bass: root position (root + fifth), standard left-hand guide
 			const bNotes = chords.map((c) => {
 				const rf = [c.notes[0], c.notes[2] ?? c.notes[0]];
 				const octs = assignOctaves(rf, 2);

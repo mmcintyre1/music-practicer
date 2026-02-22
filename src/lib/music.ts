@@ -255,6 +255,69 @@ export function getScaleFingering(
 	return { rh: [...rhUp, ...rhDown], lh: [...lhUp, ...lhDown] };
 }
 
+// --- Voice leading ---
+
+/** Choose the inversion of each chord that minimises total voice movement,
+ *  comparing voices top-down (soprano first) for classical smooth voice leading.
+ *  Returns {notes, octs} pairs ready for VexFlow. */
+export function voiceLeadChords(chords: ChordDegree[]): Array<{ notes: string[]; octs: number[] }> {
+	if (chords.length === 0) return [];
+
+	function semitone(note: string): number {
+		return CHROM_S.indexOf(ENAR_MAP[note] ?? note);
+	}
+	function getPitches(notes: string[], octs: number[]): number[] {
+		return notes.map((n, i) => octs[i] * 12 + semitone(n));
+	}
+
+	const result: Array<{ notes: string[]; octs: number[] }> = [];
+	let prevDesc: number[] | null = null;
+
+	for (const chord of chords) {
+		const notes = chord.notes;
+		const n = notes.length;
+		let bestNotes = notes;
+		let bestOcts = assignOctaves(notes, 4);
+		let bestScore = Infinity;
+
+		for (let rot = 0; rot < n; rot++) {
+			const inv = rotateNotes(notes, rot);
+			for (const startOct of [3, 4]) {
+				const octs = assignOctaves(inv, startOct);
+				const pitches = getPitches(inv, octs);
+
+				// Skip voicings that are too low or too high for treble right hand
+				if (pitches[0] < 40 || pitches[pitches.length - 1] > 79) continue;
+
+				let score: number;
+				if (prevDesc === null) {
+					// First chord: strongly prefer root position at octave 4
+					score = rot * 1000 + Math.abs(startOct - 4) * 500;
+				} else {
+					// Compare voices top-down (soprano first) — standard voice leading analysis
+					const newDesc = [...pitches].sort((a, b) => b - a);
+					const len = Math.min(prevDesc.length, newDesc.length);
+					score = 0;
+					for (let j = 0; j < len; j++) {
+						score += Math.abs(newDesc[j] - prevDesc[j]);
+					}
+				}
+
+				if (score < bestScore) {
+					bestScore = score;
+					bestNotes = inv;
+					bestOcts = octs;
+				}
+			}
+		}
+
+		result.push({ notes: bestNotes, octs: bestOcts });
+		prevDesc = [...getPitches(bestNotes, bestOcts)].sort((a, b) => b - a);
+	}
+
+	return result;
+}
+
 // --- Computed voicings ---
 
 export interface VoicingSet {
