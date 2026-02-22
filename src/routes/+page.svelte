@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabase';
 	import type { ScaleVariation, KeySession, Feel } from '$lib/supabase';
 	import {
@@ -85,10 +84,12 @@
 		const {
 			data: { user: u }
 		} = await supabase.auth.getUser();
-		if (!u) { goto('/login'); return; }
 		user = u;
-		await Promise.all([loadVariations(), loadLastSessions(), loadPieces()]);
-		selectedKey = suggestKey();
+		await loadVariations(); // public — works for guests
+		if (user) {
+			await Promise.all([loadLastSessions(), loadPieces()]);
+			selectedKey = suggestKey();
+		}
 	});
 
 	async function loadVariations() {
@@ -138,7 +139,7 @@
 	}
 
 	async function saveSession() {
-		if (!feel) return;
+		if (!user || !feel) return;
 		saving = true;
 		const { data: session, error } = await supabase
 			.from('key_sessions')
@@ -161,7 +162,7 @@
 
 	// --- Repertoire actions ---
 	async function addPiece() {
-		if (!newTitle.trim()) return;
+		if (!user || !newTitle.trim()) return;
 		addingPiece = true;
 		const { data } = await supabase
 			.from('pieces')
@@ -247,13 +248,13 @@
 		</button>
 	</div>
 
+	<!-- Persistent timer — lives outside all tab conditionals so it never resets -->
+	<section class="card timer-card">
+		<Timer defaultMinutes={10} />
+	</section>
+
 	<!-- ===== SCALES TAB ===== -->
 	{#if selectedTab === 'scales'}
-		<section class="card timer-card">
-			<h2>10 min timer</h2>
-			<Timer defaultMinutes={10} />
-		</section>
-
 		<section class="card">
 			<h2>{selectedKey} {selectedMode} scale</h2>
 			<div class="notes-row">
@@ -325,34 +326,33 @@
 			</ul>
 		</section>
 
-		<section class="card log-card">
-			<h2>Log this session</h2>
-			<div class="log-row">
-				<label>
-					BPM
-					<input type="number" bind:value={bpm} placeholder="e.g. 80" min="20" max="300" />
-				</label>
-				<div class="feel-group">
-					<span>Feel</span>
-					{#each [1, 2, 3] as f}
-						<button class="feel-btn" class:selected={feel === f} onclick={() => (feel = f as Feel)}>
-							{FEEL_LABELS[f]}
-						</button>
-					{/each}
+		{#if user}
+			<section class="card log-card">
+				<h2>Log this session</h2>
+				<div class="log-row">
+					<label>
+						BPM
+						<input type="number" bind:value={bpm} placeholder="e.g. 80" min="20" max="300" />
+					</label>
+					<div class="feel-group">
+						<span>Feel</span>
+						{#each [1, 2, 3] as f}
+							<button class="feel-btn" class:selected={feel === f} onclick={() => (feel = f as Feel)}>
+								{FEEL_LABELS[f]}
+							</button>
+						{/each}
+					</div>
 				</div>
-			</div>
-			<button class="save-btn" disabled={!feel || saving} onclick={saveSession}>
-				{saving ? 'Saving...' : saved ? 'Saved!' : 'Save session'}
-			</button>
-		</section>
+				<button class="save-btn" disabled={!feel || saving} onclick={saveSession}>
+					{saving ? 'Saving...' : saved ? 'Saved!' : 'Save session'}
+				</button>
+			</section>
+		{:else}
+			<div class="guest-prompt"><a href="/login">Sign in</a> to save your practice sessions.</div>
+		{/if}
 
 	<!-- ===== CHORDS TAB ===== -->
 	{:else if selectedTab === 'chords'}
-		<section class="card timer-card">
-			<h2>10 min timer</h2>
-			<Timer defaultMinutes={10} />
-		</section>
-
 		<section class="card">
 			<h2>Chord progression</h2>
 			<div class="prog-tabs">
@@ -402,11 +402,6 @@
 
 	<!-- ===== ARPEGGIO TAB ===== -->
 	{:else if selectedTab === 'arpeggio'}
-		<section class="card timer-card">
-			<h2>10 min timer</h2>
-			<Timer defaultMinutes={10} />
-		</section>
-
 		<section class="card">
 			<h2>{selectedKey} {selectedMode} — {arpeggioChord.degree} arpeggio</h2>
 			<p class="chord-notes-hint">{arpeggioChord.notes.join(' – ')}</p>
@@ -459,12 +454,10 @@
 
 	<!-- ===== REPERTOIRE TAB ===== -->
 	{:else}
-		<section class="card timer-card">
-			<h2>40 min timer</h2>
-			<Timer defaultMinutes={40} />
-		</section>
-
-		<section class="card">
+		{#if !user}
+			<div class="guest-prompt"><a href="/login">Sign in</a> to track your repertoire.</div>
+		{/if}
+		<section class="card" class:hidden={!user}>
 			<div class="rep-header">
 				<h2>Pieces</h2>
 				<button class="add-btn" onclick={() => (showAddForm = !showAddForm)}>
@@ -743,4 +736,14 @@
 	.del-btn:hover { color: #ff6b6b; }
 
 	.muted { color: #444; font-size: 0.85rem; }
+
+	.hidden { display: none; }
+
+	.guest-prompt {
+		font-size: 0.85rem;
+		color: #555;
+		text-align: center;
+		padding: 0.75rem;
+	}
+	.guest-prompt a { color: #4a9eff; text-decoration: none; }
 </style>
